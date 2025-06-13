@@ -1,0 +1,26 @@
+# Ejemplo de URLs extraídas de una playlist
+# Este es el formato que genera youtube_extractor_list.py
+
+# Playlist: Tutoriales de Python (ejemplo)
+# Extraído el: 2024-01-01
+
+https://www.youtube.com/watch?v=dQw4w9WgXcQ
+https://www.youtube.com/watch?v=kJQP7kiw5Fk
+# https://www.youtube.com/watch?v=otro_video_id
+# https://www.youtube.com/watch?v=cuarto_video_id
+
+# INSTRUCCIONES DE USO:
+# 1. Para extraer URLs de playlist automáticamente, usa:
+#    python youtube_extractor_list.py "URL_DE_PLAYLIST" archivo_salida.txt
+#
+# 2. O usa la opción 3 del menú principal para playlists
+#
+# 3. Una vez que tengas URLs en un archivo como este,
+#    puedes procesarlas con la opción 2 del menú principal
+
+# FORMATO DE PLAYLIST URL:
+# https://www.youtube.com/playlist?list=PLxxxxxxxxxxxxxxxxxxxxxx
+
+# EJEMPLOS DE USO:
+# python youtube_extractor_list.py "https://www.youtube.com/playlist?list=PLrSOXFDHBtfED_VPzJbN36USCT2-wZXkR" mis_videos.txt
+# python start.py (luego opción 2, archivo: mis_videos.txt)

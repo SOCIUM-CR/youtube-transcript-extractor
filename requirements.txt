@@ -1,0 +1,6 @@
+yt-dlp>=2023.7.6
+requests>=2.25.1
+colorama>=0.4.4
+rich>=13.0.0
+pytube>=15.0.0
+beautifulsoup4>=4.9.0

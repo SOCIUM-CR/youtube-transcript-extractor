@@ -1,0 +1,15 @@
+# Archivo de ejemplo para URLs de YouTube
+# Una URL por línea, las líneas que empiecen con # son comentarios
+
+# Ejemplo de video individual:
+# https://www.youtube.com/watch?v=dQw4w9WgXcQ
+
+# Puedes agregar tantas URLs como necesites:
+# https://www.youtube.com/watch?v=otro_video_id
+# https://www.youtube.com/watch?v=tercer_video_id
+
+# Para usar este archivo:
+# 1. Descomenta las URLs que quieras procesar (quita el #)
+# 2. Reemplaza las URLs de ejemplo con las reales
+# 3. Guarda el archivo
+# 4. En el programa, selecciona la opción 2 y usa este archivo

@@ -1,0 +1,18 @@
+<!-- Archivo de ejemplo para buscar URLs de YouTube en código HTML -->
+<!-- Pega aquí el código fuente HTML que contenga videos de YouTube -->
+
+<!-- Ejemplo de HTML que contiene URLs de YouTube: -->
+<!--
+<a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">Video 1</a>
+<iframe src="https://www.youtube.com/embed/otro_video_id"></iframe>
+<script>
+    var videoUrl = "https://youtu.be/tercer_video";
+</script>
+-->
+
+<!-- INSTRUCCIONES DE USO:
+1. Reemplaza este contenido con el código HTML real
+2. El programa buscará automáticamente URLs de YouTube en el contenido
+3. Guarda el archivo como codigo_fuente.txt
+4. En el programa, selecciona la opción 4
+-->

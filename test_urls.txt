@@ -1,0 +1,8 @@
+# URLs de prueba para verificar funcionamiento
+# Estas son URLs reales que puedes usar para probar
+
+# Video en inglés (para probar detección de idioma)
+https://www.youtube.com/watch?v=dQw4w9WgXcQ
+
+# Video educativo corto
+# https://www.youtube.com/watch?v=kJQP7kiw5Fk
