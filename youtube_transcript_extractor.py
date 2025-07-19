@@ -79,7 +79,18 @@ class YouTubeTranscriptExtractor:
             return 'en'
     
     def get_transcript(self, video_url: str) -> Optional[dict]:
-        """Obtiene la transcripción de un video de YouTube usando yt-dlp."""
+        """Obtiene la transcripción de un video de YouTube usando yt-dlp con soporte PO Token y fallback."""
+        # Intentar primero con yt-dlp
+        transcript = self._get_transcript_ytdlp(video_url)
+        if transcript:
+            return transcript
+        
+        # Fallback a youtube-transcript-api si yt-dlp falla
+        self.console.print('[yellow]🔄 Intentando método alternativo...[/yellow]')
+        return self._get_transcript_fallback(video_url)
+    
+    def _get_transcript_ytdlp(self, video_url: str) -> Optional[dict]:
+        """Obtiene la transcripción usando yt-dlp con soporte para PO Tokens."""
         try:
             video_id = self.extract_video_id(video_url)
             if not video_id:
@@ -90,13 +101,15 @@ class YouTubeTranscriptExtractor:
             
             # Crear directorio temporal para descargar subtítulos
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Configurar comando yt-dlp - incluir más idiomas
+                # Configurar comando yt-dlp con soporte PO Token y bypass
                 cmd = [
                     'yt-dlp',
                     '--write-auto-sub',
                     '--write-sub', 
                     '--skip-download',
                     '--sub-lang', f'{original_language},es,en,fr,de,it,pt',
+                    '--extractor-args', 'youtube:formats=missing_pot',  # Bypass PO Token
+                    '--extractor-args', 'youtube:player_client=web,web_safari',  # Múltiples clientes
                     '--output', f'{temp_dir}/%(title)s.%(ext)s',
                     video_url
                 ]
@@ -105,8 +118,26 @@ class YouTubeTranscriptExtractor:
                 result = subprocess.run(cmd, capture_output=True, text=True, cwd=temp_dir)
                 
                 if result.returncode != 0:
-                    self.console.print(f'[bold yellow]⚠️ No hay transcripciones disponibles para este video[/bold yellow]')
-                    return None
+                    # Verificar si el error es específico de PO Token
+                    if 'po_token' in result.stderr.lower() or 'missing_pot' in result.stderr.lower():
+                        self.console.print('[yellow]⚠️ Error de PO Token detectado, probando configuración alternativa...[/yellow]')
+                        # Intentar con configuración más permisiva
+                        cmd_alt = [
+                            'yt-dlp',
+                            '--write-auto-sub',
+                            '--skip-download',
+                            '--sub-lang', 'es,en',
+                            '--extractor-args', 'youtube:formats=missing_pot',
+                            '--extractor-args', 'youtube:player_client=android,web_embedded',
+                            '--output', f'{temp_dir}/%(title)s.%(ext)s',
+                            video_url
+                        ]
+                        result = subprocess.run(cmd_alt, capture_output=True, text=True, cwd=temp_dir)
+                    
+                    if result.returncode != 0:
+                        error_msg = result.stderr.strip() if result.stderr else "Error desconocido"
+                        self.console.print(f'[bold yellow]⚠️ yt-dlp falló: {error_msg[:100]}...[/bold yellow]')
+                        return None
                 
                 # Buscar archivos de subtítulos descargados
                 vtt_files = glob.glob(f'{temp_dir}/*.vtt')
@@ -129,13 +160,113 @@ class YouTubeTranscriptExtractor:
                         # Agregar información del idioma usado
                         transcript['detected_language'] = original_language
                         transcript['selected_language'] = self._extract_language_from_filename(best_vtt)
-                        self.console.print(f'[blue]📝 Idioma seleccionado: {transcript["selected_language"]}[/blue]')
+                        transcript['method'] = 'yt-dlp'
+                        self.console.print(f'[blue]📝 Idioma seleccionado: {transcript["selected_language"]} (yt-dlp)[/blue]')
                         return transcript
                 
             return None
             
         except Exception as e:
-            self.console.print(f'[bold red]❌ Error al obtener transcripción: {str(e)}[/bold red]')
+            self.console.print(f'[bold yellow]⚠️ Error en yt-dlp: {str(e)}[/bold yellow]')
+            return None
+    
+    def _get_transcript_fallback(self, video_url: str) -> Optional[dict]:
+        """Obtiene la transcripción usando youtube-transcript-api como fallback."""
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            from youtube_transcript_api._errors import NoTranscriptFound, TranscriptsDisabled
+            
+            video_id = self.extract_video_id(video_url)
+            if not video_id:
+                return None
+            
+            # Intentar obtener transcripción con prioridad de idiomas
+            language_codes = ['es', 'en', 'es-ES', 'en-US', 'en-GB']
+            
+            transcript_list = None
+            selected_transcript = None
+            
+            try:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            except (NoTranscriptFound, TranscriptsDisabled):
+                self.console.print('[bold yellow]⚠️ No hay transcripciones disponibles para este video[/bold yellow]')
+                return None
+            
+            # Buscar transcripción manual primero
+            for lang_code in language_codes:
+                try:
+                    transcript = transcript_list.find_manually_created_transcript([lang_code])
+                    selected_transcript = transcript.fetch()
+                    selected_language = lang_code
+                    self.console.print(f'[green]✅ Transcripción manual encontrada: {lang_code}[/green]')
+                    break
+                except:
+                    continue
+            
+            # Si no hay manual, buscar automática
+            if not selected_transcript:
+                for lang_code in language_codes:
+                    try:
+                        transcript = transcript_list.find_generated_transcript([lang_code])
+                        selected_transcript = transcript.fetch()
+                        selected_language = lang_code
+                        self.console.print(f'[blue]📝 Transcripción automática encontrada: {lang_code}[/blue]')
+                        break
+                    except:
+                        continue
+            
+            # Último recurso: cualquier transcripción disponible
+            if not selected_transcript:
+                try:
+                    available_transcripts = list(transcript_list)
+                    if available_transcripts:
+                        transcript = available_transcripts[0]
+                        selected_transcript = transcript.fetch()
+                        selected_language = transcript.language_code
+                        self.console.print(f'[yellow]⚠️ Usando transcripción disponible: {selected_language}[/yellow]')
+                except:
+                    pass
+            
+            if selected_transcript:
+                # Convertir al formato esperado
+                segments = []
+                full_text = []
+                
+                for segment in selected_transcript:
+                    # Manejar diferentes formatos de respuesta de la API
+                    if hasattr(segment, 'text'):
+                        text = segment.text.strip()
+                        start = segment.start
+                        duration = segment.duration
+                    else:
+                        text = segment.get('text', '').strip()
+                        start = segment.get('start', 0)
+                        duration = segment.get('duration', 0)
+                    
+                    if text:  # Solo procesar si hay texto
+                        segments.append({
+                            'text': text,
+                            'start': start,
+                            'duration': duration,
+                            'start_formatted': self._format_timestamp(start)
+                        })
+                        full_text.append(text)
+                
+                return {
+                    'segments': segments,
+                    'full_text': ' '.join(full_text),
+                    'detected_language': selected_language,
+                    'selected_language': selected_language,
+                    'method': 'youtube-transcript-api'
+                }
+            
+            return None
+            
+        except ImportError:
+            self.console.print('[bold red]❌ youtube-transcript-api no está instalado[/bold red]')
+            return None
+        except Exception as e:
+            self.console.print(f'[bold red]❌ Error en método fallback: {str(e)}[/bold red]')
             return None
     
     def _extract_language_from_filename(self, filename: str) -> str:
@@ -327,16 +458,20 @@ class YouTubeTranscriptExtractor:
                     video_id = self.extract_video_id(video_url)
                     filename = f"{idx:03d}_{video_title}_{video_id}"
                     
-                    # Guardar texto completo
+                    # Guardar texto completo con información del método
+                    method_info = f"Método: {transcript.get('method', 'yt-dlp')}\nIdioma: {transcript.get('selected_language', 'desconocido')}\n\n"
                     with open(os.path.join(plain_dir, f"{filename}.txt"), 'w', encoding='utf-8') as f:
-                        f.write(transcript['full_text'])
+                        f.write(method_info + transcript['full_text'])
                     
                     # Guardar con timestamps
                     with open(os.path.join(timestamps_dir, f"{filename}.txt"), 'w', encoding='utf-8') as f:
+                        f.write(method_info)
                         for segment in transcript['segments']:
                             f.write(f"[{segment['start_formatted']}] {segment['text']}\n")
                     
                     successful += 1
+                    method = transcript.get('method', 'yt-dlp')
+                    self.console.print(f'[green]✅ Video {idx} procesado con {method}[/green]')
                     
                 progress.advance(task)
                 time.sleep(0.5)
