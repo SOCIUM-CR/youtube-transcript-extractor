@@ -1,0 +1,105 @@
+# YouTube Transcript Extractor - Configuration
+# Edit this file to customize the application behavior
+
+app:
+  name: "YouTube Transcript Extractor"
+  version: "1.1.0"
+
+# Output settings
+output:
+  # Base directory for all transcriptions
+  base_dir: "transcripts"
+
+  # Create both formats
+  create_plain: true
+  create_timestamps: true
+
+  # Filename pattern: {index}, {title}, {video_id} are available
+  filename_pattern: "{index:03d}_{title}_{video_id}"
+  max_filename_length: 200
+
+# Language settings
+languages:
+  # Priority order for selecting language (first available wins)
+  priority:
+    - es  # Spanish
+    - en  # English
+    - fr  # French
+    - de  # German
+    - it  # Italian
+    - pt  # Portuguese
+
+  # Fallback language if none of the above are available
+  fallback: "en"
+
+# Extraction settings
+extraction:
+  # yt-dlp configuration (primary method)
+  ytdlp:
+    # Timeout for each video extraction (seconds)
+    timeout: 120
+
+    # Number of retries on failure
+    retries: 3
+
+    # Delay between retries (seconds)
+    retry_delay: 2
+
+    # Player clients to try (in order)
+    player_clients:
+      - web
+      - web_safari
+      - android
+      - web_embedded
+
+    # Subtitle languages to attempt downloading
+    sub_languages: "es,en,fr,de,it,pt"
+
+  # youtube-transcript-api fallback
+  fallback:
+    enabled: true
+    timeout: 60
+
+# Processing settings
+processing:
+  # Parallel processing (experimental)
+  parallel:
+    enabled: false
+    max_workers: 4
+
+  # Rate limiting to avoid YouTube bans
+  delay_between_videos: 0.5  # seconds
+
+  # Cache settings
+  cache:
+    enabled: true
+    file: ".transcript_cache.json"
+
+# Logging configuration
+logging:
+  # Level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+
+  # Log file path
+  file: "youtube_extractor.log"
+
+  # Log rotation settings
+  max_size_mb: 10
+  backup_count: 3
+
+  # Log format
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# UI settings
+ui:
+  # Enable colors in terminal
+  use_colors: true
+
+  # Show progress bars
+  show_progress_bar: true
+
+  # Confirm before processing (interactive mode)
+  confirm_before_processing: true
+
+  # Preview URL count in lists
+  preview_urls_count: 5

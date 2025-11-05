@@ -17,6 +17,7 @@ from colorama import Fore, Style
 import sys
 import tempfile
 import glob
+from utils.sanitize import sanitize_filename, validate_output_path, validate_video_id
 
 class YouTubeTranscriptExtractor:
     def __init__(self):
@@ -454,9 +455,10 @@ class YouTubeTranscriptExtractor:
                 
                 transcript = self.get_transcript(video_url)
                 if transcript and transcript['segments']:
-                    # Crear nombre de archivo
+                    # Crear nombre de archivo (sanitizado para seguridad)
                     video_id = self.extract_video_id(video_url)
-                    filename = f"{idx:03d}_{video_title}_{video_id}"
+                    safe_title = sanitize_filename(video_title)
+                    filename = f"{idx:03d}_{safe_title}_{video_id}"
                     
                     # Guardar texto completo con información del método
                     method_info = f"Método: {transcript.get('method', 'yt-dlp')}\nIdioma: {transcript.get('selected_language', 'desconocido')}\n\n"
@@ -503,14 +505,42 @@ class YouTubeTranscriptExtractor:
             self.console.print(Panel(warning_text, title='[bold yellow]⚠️  Procesamiento Completado', border_style='yellow'))
 
     def validate_youtube_url(self, url: str) -> bool:
-        """Valida si una URL es de YouTube."""
+        """
+        Valida si una URL es de YouTube y contiene un video ID válido.
+
+        Args:
+            url: URL a validar
+
+        Returns:
+            True si es una URL válida de YouTube, False en caso contrario
+        """
+        if not url:
+            return False
+
+        # Convertir a minúsculas para validación case-insensitive
+        url_lower = url.lower()
+
         youtube_patterns = [
             r'youtube\.com/watch\?v=',
             r'youtu\.be/',
             r'youtube\.com/playlist\?list=',
             r'youtube\.com/embed/'
         ]
-        return any(re.search(pattern, url) for pattern in youtube_patterns)
+
+        # Verificar que contenga algún patrón de YouTube
+        if not any(re.search(pattern, url_lower) for pattern in youtube_patterns):
+            return False
+
+        # Si es una playlist, no validar video ID
+        if 'playlist?list=' in url_lower:
+            return True
+
+        # Para videos, validar que tenga un video ID válido
+        video_id = self.extract_video_id(url)
+        if video_id:
+            return validate_video_id(video_id)
+
+        return False
     
     def get_playlist_urls(self, playlist_url: str) -> List[str]:
         """Extrae URLs de videos de una playlist usando youtube_extractor_list.py"""
