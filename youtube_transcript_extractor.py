@@ -17,16 +17,39 @@ from colorama import Fore, Style
 import sys
 import tempfile
 import glob
+import argparse
 from utils.sanitize import sanitize_filename, validate_output_path, validate_video_id
+from cache import TranscriptCache
+from config import get_config
+from utils.logging_config import setup_logging, get_logger, log_exception, log_performance
 
 class YouTubeTranscriptExtractor:
-    def __init__(self):
+    def __init__(self, force_reprocess: bool = False):
         self.session = requests.Session()
+
+        # Inicializar logging
+        self.logger = setup_logging('youtube_extractor')
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
         self.console = Console()
         colorama.init(autoreset=True)
+
+        # Load configuration
+        self.config = get_config()
+
+        # Initialize cache system
+        cache_enabled = self.config.get('processing.cache.enabled', True)
+        cache_file = self.config.get('processing.cache.file', '.transcript_cache.json')
+        self.cache = TranscriptCache(cache_file) if cache_enabled else None
+        self.force_reprocess = force_reprocess
+
+        # Log initialization
+        self.logger.info('YouTubeTranscriptExtractor initialized')
+        self.logger.debug(f'Cache enabled: {cache_enabled}, Force reprocess: {force_reprocess}')
+        if self.cache:
+            stats = self.cache.get_stats()
+            self.logger.info(f'Cache loaded with {stats["total_cached"]} videos')
 
     def extract_video_id(self, url: str) -> Optional[str]:
         """Extrae el ID del video de una URL de YouTube."""
@@ -81,12 +104,17 @@ class YouTubeTranscriptExtractor:
     
     def get_transcript(self, video_url: str) -> Optional[dict]:
         """Obtiene la transcripción de un video de YouTube usando yt-dlp con soporte PO Token y fallback."""
+        video_id = self.extract_video_id(video_url)
+        self.logger.info(f'Iniciando extracción de transcripción para video: {video_id}')
+
         # Intentar primero con yt-dlp
         transcript = self._get_transcript_ytdlp(video_url)
         if transcript:
+            self.logger.info(f'Transcripción obtenida con yt-dlp para {video_id}')
             return transcript
-        
+
         # Fallback a youtube-transcript-api si yt-dlp falla
+        self.logger.warning(f'yt-dlp falló para {video_id}, intentando método alternativo')
         self.console.print('[yellow]🔄 Intentando método alternativo...[/yellow]')
         return self._get_transcript_fallback(video_url)
     
@@ -166,8 +194,9 @@ class YouTubeTranscriptExtractor:
                         return transcript
                 
             return None
-            
+
         except Exception as e:
+            self.logger.error(f'Error en yt-dlp para {video_id}: {str(e)}', exc_info=True)
             self.console.print(f'[bold yellow]⚠️ Error en yt-dlp: {str(e)}[/bold yellow]')
             return None
     
@@ -262,11 +291,15 @@ class YouTubeTranscriptExtractor:
                 }
             
             return None
-            
+
         except ImportError:
+            video_id = self.extract_video_id(video_url)
+            self.logger.error(f'youtube-transcript-api no instalado para video {video_id}')
             self.console.print('[bold red]❌ youtube-transcript-api no está instalado[/bold red]')
             return None
         except Exception as e:
+            video_id = self.extract_video_id(video_url)
+            self.logger.error(f'Error en método fallback para {video_id}: {str(e)}', exc_info=True)
             self.console.print(f'[bold red]❌ Error en método fallback: {str(e)}[/bold red]')
             return None
     
@@ -431,11 +464,47 @@ class YouTubeTranscriptExtractor:
 
     def process_videos_from_urls(self, urls: List[str], folder_name: str):
         """Procesa una lista de URLs de videos."""
+        self.logger.info(f'Iniciando procesamiento de {len(urls)} videos en carpeta: {folder_name}')
+
         timestamps_dir, plain_dir = self.create_directory_structure('transcripts', folder_name)
-        
-        total_videos = len(urls)
+
+        # Filtrar videos según caché
+        videos_to_process = []
+        videos_skipped = []
+
+        for url in urls:
+            video_id = self.extract_video_id(url)
+            if self.cache and video_id and self.cache.is_processed(video_id) and not self.force_reprocess:
+                videos_skipped.append((url, video_id))
+            else:
+                videos_to_process.append(url)
+
+        # Mostrar videos omitidos
+        if videos_skipped:
+            self.logger.info(f'{len(videos_skipped)} videos omitidos por estar en caché')
+            self.console.print()
+            self.console.print('[bold yellow]📋 Videos ya procesados (omitidos):[/bold yellow]')
+            for url, video_id in videos_skipped:
+                cached_entry = self.cache.get_entry(video_id)
+                processed_date = cached_entry.get('processed_at', 'fecha desconocida')[:10]  # Solo fecha
+                title = cached_entry.get('title', 'Sin título')[:50]
+                self.console.print(f'  [dim]⏭️  {title}... ({processed_date})[/dim]')
+
+            self.console.print()
+            self.console.print(
+                f'[yellow]ℹ️  {len(videos_skipped)} video(s) omitido(s). '
+                f'Usa --force para reprocesarlos.[/yellow]'
+            )
+            self.console.print()
+
+        # Si no hay videos para procesar, salir
+        if not videos_to_process:
+            self.console.print('[bold green]✅ Todos los videos ya fueron procesados.[/bold green]')
+            return
+
+        total_videos = len(videos_to_process)
         successful = 0
-        
+
         with Progress(
             TextColumn('[bold blue]Procesando...', justify='right'),
             BarColumn(bar_width=None),
@@ -446,46 +515,84 @@ class YouTubeTranscriptExtractor:
             TimeRemainingColumn(),
             console=self.console
         ) as progress:
-            
+
             task = progress.add_task('Extrayendo transcripciones', total=total_videos)
-            
-            for idx, video_url in enumerate(urls, 1):
+
+            for idx, video_url in enumerate(videos_to_process, 1):
                 video_title = self.get_video_title(video_url)
                 progress.update(task, description=f'[bold blue]📹 {video_title[:40]}...')
-                
+
                 transcript = self.get_transcript(video_url)
                 if transcript and transcript['segments']:
                     # Crear nombre de archivo (sanitizado para seguridad)
                     video_id = self.extract_video_id(video_url)
                     safe_title = sanitize_filename(video_title)
                     filename = f"{idx:03d}_{safe_title}_{video_id}"
-                    
+
                     # Guardar texto completo con información del método
                     method_info = f"Método: {transcript.get('method', 'yt-dlp')}\nIdioma: {transcript.get('selected_language', 'desconocido')}\n\n"
                     with open(os.path.join(plain_dir, f"{filename}.txt"), 'w', encoding='utf-8') as f:
                         f.write(method_info + transcript['full_text'])
-                    
+
                     # Guardar con timestamps
                     with open(os.path.join(timestamps_dir, f"{filename}.txt"), 'w', encoding='utf-8') as f:
                         f.write(method_info)
                         for segment in transcript['segments']:
                             f.write(f"[{segment['start_formatted']}] {segment['text']}\n")
-                    
+
+                    # Marcar como procesado en caché
+                    if self.cache and video_id:
+                        self.cache.mark_processed(
+                            video_id=video_id,
+                            title=video_title,
+                            language=transcript.get('selected_language', 'desconocido'),
+                            method=transcript.get('method', 'yt-dlp'),
+                            folder=folder_name
+                        )
+
                     successful += 1
                     method = transcript.get('method', 'yt-dlp')
+                    self.logger.info(
+                        f'Video procesado exitosamente: {video_id}',
+                        extra={
+                            'video_id': video_id,
+                            'title': video_title[:100],
+                            'method': method,
+                            'language': transcript.get('selected_language', 'desconocido')
+                        }
+                    )
                     self.console.print(f'[green]✅ Video {idx} procesado con {method}[/green]')
-                    
+                else:
+                    # Fallo al obtener transcripción
+                    video_id = self.extract_video_id(video_url)
+                    self.logger.warning(f'Falló la extracción de transcripción para video: {video_id}')
+
                 progress.advance(task)
                 time.sleep(0.5)
         
         # Mostrar resumen final
         self.console.print()
+        total_input_videos = len(urls)
+        skipped_count = len(videos_skipped)
+
+        # Log resumen
+        success_rate = (successful / total_videos * 100) if total_videos > 0 else 0
+        self.logger.info(
+            f'Procesamiento completado: {successful}/{total_videos} exitosos '
+            f'({success_rate:.1f}%), {skipped_count} omitidos'
+        )
+
         if successful == total_videos:
             success_text = f'''[bold green]✅ ¡Procesamiento completado exitosamente!
 
 📊 Estadísticas:
-   • Videos procesados: {successful}/{total_videos}
-   • Éxito: 100%
+   • Videos nuevos procesados: {successful}/{total_videos}
+   • Éxito: 100%'''
+            if skipped_count > 0:
+                success_text += f'\n   • Videos omitidos (caché): {skipped_count}'
+                success_text += f'\n   • Total de videos en lista: {total_input_videos}'
+
+            success_text += f'''
 
 📁 Archivos guardados en:
    • Texto plano: {plain_dir}
@@ -497,7 +604,12 @@ class YouTubeTranscriptExtractor:
 📊 Estadísticas:
    • Videos procesados: {successful}/{total_videos}
    • Éxito: {(successful/total_videos)*100:.1f}%
-   • Errores: {total_videos-successful}
+   • Errores: {total_videos-successful}'''
+            if skipped_count > 0:
+                warning_text += f'\n   • Videos omitidos (caché): {skipped_count}'
+                warning_text += f'\n   • Total de videos en lista: {total_input_videos}'
+
+            warning_text += f'''
 
 📁 Archivos guardados en:
    • Texto plano: {plain_dir}
@@ -593,8 +705,100 @@ def show_menu(extractor):
     return choice
 
 def main():
-    extractor = YouTubeTranscriptExtractor()
-    
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='YouTube Transcript Extractor - Extrae transcripciones de videos de YouTube',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Ejemplos:
+  python youtube_transcript_extractor.py                  # Modo interactivo normal
+  python youtube_transcript_extractor.py --cache-stats    # Mostrar estadísticas de caché
+  python youtube_transcript_extractor.py --force          # Reprocesar todos los videos (ignora caché)
+  python youtube_transcript_extractor.py --clear-cache    # Limpiar caché y salir
+        '''
+    )
+
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Forzar reprocesamiento de todos los videos (ignora caché)'
+    )
+
+    parser.add_argument(
+        '--cache-stats',
+        action='store_true',
+        help='Mostrar estadísticas del caché y salir'
+    )
+
+    parser.add_argument(
+        '--clear-cache',
+        action='store_true',
+        help='Limpiar todo el caché y salir'
+    )
+
+    args = parser.parse_args()
+
+    # Manejar comandos que no requieren modo interactivo
+    if args.cache_stats or args.clear_cache:
+        config = get_config()
+        cache_file = config.get('processing.cache.file', '.transcript_cache.json')
+        cache = TranscriptCache(cache_file)
+        console = Console()
+
+        if args.cache_stats:
+            # Mostrar estadísticas de caché
+            stats = cache.get_stats()
+
+            console.print('\n[bold cyan]📊 Estadísticas de Caché[/bold cyan]\n')
+
+            table = Table(title='Resumen del Caché')
+            table.add_column('Métrica', style='cyan')
+            table.add_column('Valor', style='green')
+
+            table.add_row('Total de videos', str(stats['total_cached']))
+
+            if stats['total_cached'] > 0:
+                table.add_row('Entrada más antigua', stats['oldest_entry'][:10])
+                table.add_row('Entrada más reciente', stats['newest_entry'][:10])
+
+            console.print(table)
+
+            # Estadísticas por idioma
+            if stats['by_language']:
+                console.print('\n[bold]Por idioma:[/bold]')
+                for lang, count in stats['by_language'].items():
+                    console.print(f'  • {lang}: {count}')
+
+            # Estadísticas por método
+            if stats['by_method']:
+                console.print('\n[bold]Por método de extracción:[/bold]')
+                for method, count in stats['by_method'].items():
+                    console.print(f'  • {method}: {count}')
+
+            # Estadísticas por carpeta
+            if stats['by_folder']:
+                console.print('\n[bold]Por carpeta:[/bold]')
+                for folder, count in stats['by_folder'].items():
+                    console.print(f'  • {folder}: {count}')
+
+            console.print()
+            return
+
+        if args.clear_cache:
+            # Limpiar caché
+            if Confirm.ask('¿Estás seguro de que deseas limpiar todo el caché?'):
+                cache.clear()
+                console.print('[bold green]✅ Caché limpiado exitosamente[/bold green]')
+            else:
+                console.print('[yellow]Operación cancelada[/yellow]')
+            return
+
+    # Crear extractor con flag force_reprocess
+    extractor = YouTubeTranscriptExtractor(force_reprocess=args.force)
+
+    if args.force:
+        extractor.console.print('[bold yellow]⚠️  Modo FORCE activado: se reprocesarán todos los videos[/bold yellow]\n')
+
     try:
         extractor.show_welcome()
         
